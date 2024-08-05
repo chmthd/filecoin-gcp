@@ -157,7 +157,7 @@ IS_MINER=$1
 # Variables
 LOTUS_REPO="https://github.com/filecoin-project/lotus.git"
 LOTUS_DIR="$HOME/lotus-devnet"
-GO_VERSION="1.17.5"
+GO_VERSION="1.21.7" # Updated Go version to meet Lotus requirements
 SECTOR_SIZE="34359738368"  # 32 GiB in bytes
 NUM_SECTORS=1
 
@@ -168,41 +168,34 @@ sudo apt install -y build-essential jq pkg-config curl git bzr hwloc
 
 # Install Go
 echo "Installing Go..."
-wget https://golang.org/dl/go$GO_VERSION.linux-amd64.tar.gz
+wget -q https://golang.org/dl/go$GO_VERSION.linux-amd64.tar.gz
 sudo tar -C /usr/local -xzf go$GO_VERSION.linux-amd64.tar.gz
 rm go$GO_VERSION.linux-amd64.tar.gz
 
 # Set Go environment variables
 echo "Setting Go environment variables..."
-echo "export PATH=\$PATH:/usr/local/go/bin" >> ~/.bashrc
-echo "export GOPATH=\$HOME/go" >> ~/.bashrc
-echo "export PATH=\$PATH:\$GOPATH/bin" >> ~/.bashrc
-source ~/.bashrc
+echo "export PATH=\$PATH:/usr/local/go/bin" >> ~/.profile
+echo "export GOPATH=\$HOME/go" >> ~/.profile
+echo "export PATH=\$PATH:\$GOPATH/bin" >> ~/.profile
+
+# Source the updated .profile to make changes take effect
+echo "Sourcing profile to apply environment changes..."
+source ~/.profile
 
 # Verify Go installation
 echo "Verifying Go installation..."
-if ! command -v go &> /dev/null; then
-    echo "Go installation failed or PATH not set correctly. Exiting."
-    exit 1
-fi
-echo "Go is installed: $(go version)"
+go version || { echo "Go installation failed or PATH not set correctly. Exiting."; exit 1; }
 
 # Install Rust
 echo "Installing Rust..."
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
-# Ensure the environment is updated
-echo "Sourcing .bashrc and Rust environment..."
+# Source Rust environment
 . "$HOME/.cargo/env"
-source ~/.bashrc
 
 # Verify Rust installation
 echo "Verifying Rust installation..."
-if ! command -v rustc &> /dev/null; then
-    echo "Rust installation failed or PATH not set correctly. Exiting."
-    exit 1
-fi
-echo "Rust is installed: $(rustc --version)"
+rustc --version || { echo "Rust installation failed or PATH not set correctly. Exiting."; exit 1; }
 
 # Clone Lotus repository
 echo "Cloning Lotus repository..."
@@ -235,12 +228,16 @@ if [ "$IS_MINER" = "true" ]; then
 
     # Export environment variables
     echo "Exporting environment variables for miner..."
-    echo "export LOTUS_PATH=$HOME/.lotus-local-net" >> ~/.bashrc
-    echo "export LOTUS_MINER_PATH=$HOME/.lotus-miner-local-net" >> ~/.bashrc
-    echo "export LOTUS_SKIP_GENESIS_CHECK=_yes_" >> ~/.bashrc
-    echo "export CGO_CFLAGS_ALLOW=\"-D__BLST_PORTABLE__\"" >> ~/.bashrc
-    echo "export CGO_CFLAGS=\"-D__BLST_PORTABLE__\"" >> ~/.bashrc
-    source ~/.bashrc
+    cat <<'EOL' >> ~/.profile
+export LOTUS_PATH=$HOME/.lotus-local-net
+export LOTUS_MINER_PATH=$HOME/.lotus-miner-local-net
+export LOTUS_SKIP_GENESIS_CHECK=_yes_
+export CGO_CFLAGS_ALLOW="-D__BLST_PORTABLE__"
+export CGO_CFLAGS="-D__BLST_PORTABLE__"
+EOL
+
+    # Source the updated .profile to make changes take effect
+    source ~/.profile
 
     # Start the client node
     echo "Starting the client node..."
@@ -266,8 +263,10 @@ if [ "$IS_MINER" = "true" ]; then
 else
     # Export environment variables for client node
     echo "Exporting environment variables for client..."
-    echo "export LOTUS_PATH=$HOME/.lotus-local-net" >> ~/.bashrc
-    source ~/.bashrc
+    echo "export LOTUS_PATH=$HOME/.lotus-local-net" >> ~/.profile
+
+    # Source the updated .profile to make changes take effect
+    source ~/.profile
 
     # Start the client node
     echo "Starting the client node..."
