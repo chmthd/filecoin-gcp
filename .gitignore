@@ -1,0 +1,25 @@
+# Ignore all text files
+*.txt
+
+# Ignore SSH private keys
+id_rsa
+id_rsa.pub
+id_dsa
+id_dsa.pub
+id_ecdsa
+id_ecdsa.pub
+id_ed25519
+id_ed25519.pub
+
+# Ignore any file ending with .pem, which is commonly used for keys
+*.pem
+
+# Ignore known_hosts file which is typically used by SSH
+known_hosts
+
+# Ignore other SSH-related files
+.ssh/config
+.ssh/authorized_keys
+.ssh/known_hosts
+.ssh/id_*
+
