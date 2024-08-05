@@ -16,7 +16,7 @@ NUM_SECTORS=1
 # Update and install dependencies
 echo "Updating and installing dependencies..."
 sudo apt update
-sudo apt install -y build-essential jq pkg-config curl git bzr hwloc
+sudo apt install -y build-essential jq pkg-config curl git bzr hwloc ocl-icd-opencl-dev
 
 # Install Go
 echo "Installing Go..."
