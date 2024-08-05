@@ -4,7 +4,7 @@
 set -e
 
 # Configuration
-PROJECT_ID="sit724"                 # Replace with your GCP project ID
+PROJECT_ID="sit724-24t2-dabare-20af1ec"                 # Replace with your GCP project ID
 ZONE="us-central1-a"                # Choose your preferred zone
 NETWORK="filecoin-network"          # Custom network name
 SUBNET="filecoin-subnet"            # Custom subnet name
@@ -13,7 +13,7 @@ IMAGE_FAMILY="ubuntu-2004-lts"      # Ubuntu 20.04 LTS image
 IMAGE_PROJECT="ubuntu-os-cloud"
 MINER_INSTANCE_NAME="filecoin-miner"
 CLIENT_INSTANCE_NAME="filecoin-client"
-MACHINE_TYPE_MINER="n1-standard-4"  # 4 vCPUs, 16 GiB memory
+MACHINE_TYPE_MINER="n1-standard-4"  # 4 vCPUs, 15 GiB memory
 MACHINE_TYPE_CLIENT="n1-standard-2" # 2 vCPU, 8 GiB memory
 DISK_SIZE_MINER="64"                # 64 GiB for miner
 DISK_SIZE_CLIENT="32"               # 32 GiB for client
@@ -127,7 +127,7 @@ setup_filecoin_node() {
 
     # Wait for the instance to initialize
     echo "Waiting for the instance $INSTANCE_NAME to be ready..."
-    sleep 10  # Wait for 2 minutes for initialization
+    sleep 120  # Wait for 2 minutes for initialization
 
     # Copy the setup script to the instance
     gcloud compute scp setup_filecoin.sh $INSTANCE_NAME:~ --zone=$ZONE --project=$PROJECT_ID
@@ -164,7 +164,7 @@ NUM_SECTORS=1
 # Update and install dependencies
 echo "Updating and installing dependencies..."
 sudo apt update
-sudo apt install -y build-essential jq pkg-config curl git bzr hwloc ocl-icd-opencl-dev
+sudo apt install -y build-essential jq pkg-config curl git bzr libhwloc-dev ocl-icd-opencl-dev
 
 # Install Go
 echo "Installing Go..."
