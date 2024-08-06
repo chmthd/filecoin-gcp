@@ -23,3 +23,11 @@ known_hosts
 .ssh/known_hosts
 .ssh/id_*
 
+# Ignore Terraform config files
+*.tfstate
+*.tfstate.*
+*.backup
+*.terraform.lock.hcl
+*.terraform.lock.info
+.terraform/
+
