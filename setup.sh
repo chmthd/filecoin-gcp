@@ -4,21 +4,40 @@
 set -e
 
 # Configuration
-PROJECT_ID="sit724-24t2-dabare-20af1ec"                 # Replace with your GCP project ID
-ZONE="us-central1-a"                # Choose your preferred zone
-NETWORK="filecoin-network"          # Custom network name
-SUBNET="filecoin-subnet"            # Custom subnet name
-REGION="us-central1"                # Region for the subnet
-IMAGE_FAMILY="ubuntu-2004-lts"      # Ubuntu 20.04 LTS image
+PROJECT_ID="sit724"  # Replace with your GCP project ID
+ZONE="us-central1-b"                    # Choose your preferred zone
+NETWORK="filecoin-network"              # Custom network name
+SUBNET="filecoin-subnet"                # Custom subnet name
+REGION="us-central1"                    # Region for the subnet
+IMAGE_FAMILY="ubuntu-2004-lts"          # Ubuntu 20.04 LTS image
 IMAGE_PROJECT="ubuntu-os-cloud"
 MINER_INSTANCE_NAME="filecoin-miner"
 CLIENT_INSTANCE_NAME="filecoin-client"
-MACHINE_TYPE_MINER="n1-standard-4"  # 4 vCPUs, 15 GiB memory
-MACHINE_TYPE_CLIENT="n1-standard-2" # 2 vCPU, 8 GiB memory
-DISK_SIZE_MINER="64"                # 64 GiB for miner
-DISK_SIZE_CLIENT="32"               # 32 GiB for client
-PREEMPTIBLE=false                   # Set to true if you want preemptible instances
+MACHINE_TYPE_MINER="e2-standard-4"      # 4 vCPUs, 15 GiB memory
+MACHINE_TYPE_CLIENT="e2-standard-2"     # 2 vCPU, 8 GiB memory
+DISK_SIZE_MINER="64"                    # 64 GiB for miner
+DISK_SIZE_CLIENT="32"                   # 32 GiB for client
+PREEMPTIBLE=false                       # Set to true if you want preemptible instances
 SSH_KEY_PATH="$HOME/.ssh/google_compute_engine.pub"  # Path to the SSH public key
+BUCKET_NAME="filecoin-proving-params-bucket"  # GCS bucket name
+PROVING_PARAMS_DIR="/var/tmp/filecoin-proof-parameters"
+
+# Function to check if a GCS bucket exists
+bucket_exists() {
+    gsutil ls -p $PROJECT_ID gs://$BUCKET_NAME/ &>/dev/null
+    return $?
+}
+
+# Function to create a GCS bucket if it doesn't exist
+create_bucket_if_not_exists() {
+    if bucket_exists; then
+        echo "GCS bucket '$BUCKET_NAME' already exists, skipping creation."
+    else
+        echo "Creating GCS bucket '$BUCKET_NAME'..."
+        gsutil mb -p $PROJECT_ID -l $REGION gs://$BUCKET_NAME
+        echo "Bucket '$BUCKET_NAME' created successfully."
+    fi
+}
 
 # Function to check if a resource exists
 resource_exists() {
@@ -127,7 +146,7 @@ setup_filecoin_node() {
 
     # Wait for the instance to initialize
     echo "Waiting for the instance $INSTANCE_NAME to be ready..."
-    sleep 120  # Wait for 2 minutes for initialization
+    sleep 10  # Wait for 2 minutes for initialization
 
     # Copy the setup script to the instance
     gcloud compute scp setup_filecoin.sh $INSTANCE_NAME:~ --zone=$ZONE --project=$PROJECT_ID
@@ -158,13 +177,51 @@ IS_MINER=$1
 LOTUS_REPO="https://github.com/filecoin-project/lotus.git"
 LOTUS_DIR="$HOME/lotus-devnet"
 GO_VERSION="1.21.7" # Updated Go version to meet Lotus requirements
-SECTOR_SIZE="34359738368"  # 32 GiB in bytes
+SECTOR_SIZE="20000"  # Sector size set to 20000 bytes for testing
 NUM_SECTORS=1
+BUCKET_NAME="filecoin-proving-params-bucket"  # GCS bucket name
+PROVING_PARAMS_DIR="/var/tmp/filecoin-proof-parameters"
+
+# Function to check if proving parameters are available locally
+are_proving_params_available() {
+    local file_count=$(ls $PROVING_PARAMS_DIR/*.params 2>/dev/null | wc -l)
+    if [ $file_count -gt 0 ]; then
+        return 0 # True: params available
+    else
+        return 1 # False: params not available
+    fi
+}
+
+# Function to download proving parameters from GCS if not available locally
+download_proving_params() {
+    if are_proving_params_available; then
+        echo "Proving parameters already available locally, skipping download."
+    else
+        echo "Downloading proving parameters from GCS..."
+        mkdir -p $PROVING_PARAMS_DIR
+        if gsutil -m cp gs://$BUCKET_NAME/proving-parameters/*.params $PROVING_PARAMS_DIR/; then
+            echo "Proving parameters downloaded successfully from GCS."
+        else
+            echo "Failed to download proving parameters. Check GCS permissions and bucket availability."
+            exit 1
+        fi
+    fi
+}
+
+# Function to upload proving parameters to GCS if not already uploaded
+upload_proving_params_to_gcs() {
+    if gsutil -q stat gs://$BUCKET_NAME/proving-parameters/*.params; then
+        echo "Proving parameters already uploaded to GCS, skipping upload."
+    else
+        echo "Uploading proving parameters to GCS..."
+        gsutil -m cp $PROVING_PARAMS_DIR/*.params gs://$BUCKET_NAME/proving-parameters/
+    fi
+}
 
 # Update and install dependencies
 echo "Updating and installing dependencies..."
 sudo apt update
-sudo apt install -y build-essential jq pkg-config curl git bzr libhwloc-dev ocl-icd-opencl-dev
+sudo apt install -y build-essential jq pkg-config curl git bzr hwloc ocl-icd-opencl-dev
 
 # Install Go
 echo "Installing Go..."
@@ -205,13 +262,20 @@ git clone $LOTUS_REPO
 cd lotus
 git checkout releases
 
+# Check for and download proving parameters
+download_proving_params
+
 # Build Lotus
 echo "Building Lotus binaries..."
 make clean all
 
-# Fetch proving parameters
-echo "Fetching proving parameters..."
-./lotus fetch-params $SECTOR_SIZE
+# Fetch proving parameters if not already available
+if ! are_proving_params_available; then
+    echo "Fetching proving parameters..."
+    ./lotus fetch-params $SECTOR_SIZE
+    # Upload to GCS after downloading
+    upload_proving_params_to_gcs
+fi
 
 if [ "$IS_MINER" = "true" ]; then
     # Pre-seal sectors for the genesis block
@@ -275,6 +339,9 @@ else
     echo "Client node setup complete. The client node is running."
 fi
 EOF
+
+# Create GCS bucket for proving parameters if not exists
+create_bucket_if_not_exists
 
 # Set up the miner node
 setup_filecoin_node $MINER_INSTANCE_NAME true

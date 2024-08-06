@@ -10,8 +10,44 @@ IS_MINER=$1
 LOTUS_REPO="https://github.com/filecoin-project/lotus.git"
 LOTUS_DIR="$HOME/lotus-devnet"
 GO_VERSION="1.21.7" # Updated Go version to meet Lotus requirements
-SECTOR_SIZE="34359738368"  # 32 GiB in bytes
+SECTOR_SIZE="20000"  # 32 GiB in bytes
 NUM_SECTORS=1
+BUCKET_NAME="filecoin-proving-params-bucket"  # GCS bucket name
+PROVING_PARAMS_DIR="/var/tmp/filecoin-proof-parameters"
+
+# Function to check if proving parameters are available locally
+are_proving_params_available() {
+    local file_count=$(ls $PROVING_PARAMS_DIR/*.params 2>/dev/null | wc -l)
+    if [ $file_count -gt 0 ]; then
+        return 0 # True: params available
+    else
+        return 1 # False: params not available
+    fi
+}
+
+# Function to download proving parameters from GCS if not available locally
+download_proving_params() {
+    if are_proving_params_available; then
+        echo "Proving parameters already available locally, skipping download."
+    else
+        echo "Downloading proving parameters from GCS..."
+        mkdir -p $PROVING_PARAMS_DIR
+        gsutil -m cp gs://$BUCKET_NAME/proving-parameters/*.params $PROVING_PARAMS_DIR/ || {
+            echo "Failed to download proving parameters. Check GCS permissions and bucket availability."
+            exit 1
+        }
+    fi
+}
+
+# Function to upload proving parameters to GCS if not already uploaded
+upload_proving_params_to_gcs() {
+    if gsutil -q stat gs://$BUCKET_NAME/proving-parameters/*.params; then
+        echo "Proving parameters already uploaded to GCS, skipping upload."
+    else
+        echo "Uploading proving parameters to GCS..."
+        gsutil -m cp $PROVING_PARAMS_DIR/*.params gs://$BUCKET_NAME/proving-parameters/
+    fi
+}
 
 # Update and install dependencies
 echo "Updating and installing dependencies..."
@@ -57,13 +93,20 @@ git clone $LOTUS_REPO
 cd lotus
 git checkout releases
 
+# Check for and download proving parameters
+download_proving_params
+
 # Build Lotus
 echo "Building Lotus binaries..."
 make clean all
 
-# Fetch proving parameters
-echo "Fetching proving parameters..."
-./lotus fetch-params $SECTOR_SIZE
+# Fetch proving parameters if not already available
+if ! are_proving_params_available; then
+    echo "Fetching proving parameters..."
+    ./lotus fetch-params $SECTOR_SIZE
+    # Upload to GCS after downloading
+    upload_proving_params_to_gcs
+fi
 
 if [ "$IS_MINER" = "true" ]; then
     # Pre-seal sectors for the genesis block
