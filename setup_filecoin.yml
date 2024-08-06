@@ -19,12 +19,32 @@
           - tmux
         state: present
 
-    - name: Install Go
+    - name: Download Go tarball
+      get_url:
+        url: "https://go.dev/dl/go1.21.7.linux-amd64.tar.gz"
+        dest: "/tmp/go1.21.7.linux-amd64.tar.gz"
+
+    - name: Extract Go
+      unarchive:
+        src: "/tmp/go1.21.7.linux-amd64.tar.gz"
+        dest: "/usr/local"
+        remote_src: yes
+
+    - name: Set Go environment variables
       shell: |
-        wget https://go.dev/dl/go1.20.7.linux-amd64.tar.gz
-        tar -C /usr/local -xzf go1.20.7.linux-amd64.tar.gz
-        echo "export PATH=\$PATH:/usr/local/go/bin" >> /etc/profile
-        source /etc/profile
+        echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
+        export PATH=$PATH:/usr/local/go/bin
+      args:
+        executable: /bin/bash
+
+    - name: Verify Go installation
+      shell: |
+        source /etc/profile.d/go.sh
+        go version
+      register: go_version_output
+      failed_when: go_version_output.rc != 0
+      args:
+        executable: /bin/bash
 
     - name: Clone Lotus repository
       git:
@@ -34,13 +54,17 @@
 
     - name: Build Lotus
       shell: |
+        source /etc/profile.d/go.sh
         cd /root/lotus
         make 2k
         ./lotus fetch-params 2048
+      args:
+        executable: /bin/bash
 
-    - name: Set environment variables
+    - name: Set Lotus environment variables
       lineinfile:
-        path: /etc/profile
+        path: "/etc/profile.d/lotus.sh"
+        create: yes
         line: "{{ item }}"
       loop:
         - 'export LOTUS_PATH=/root/.lotus-local-net'
@@ -49,8 +73,10 @@
         - 'export CGO_CFLAGS_ALLOW="-D__BLST_PORTABLE__"'
         - 'export CGO_CFLAGS="-D__BLST_PORTABLE__"'
 
-    - name: Source environment variables
-      shell: source /etc/profile
+    - name: Source Lotus environment variables
+      shell: "source /etc/profile.d/lotus.sh"
+      args:
+        executable: /bin/bash
 
     - name: Pre-seal sectors and create genesis block (only on the first node)
       when: inventory_hostname == groups['filecoin_nodes'][0]
@@ -60,15 +86,18 @@
         ./lotus-seed genesis new /root/localnet.json
         ./lotus-seed genesis add-miner /root/localnet.json /root/.genesis-sectors/pre-seal-t01000.json
       register: genesis_block_created
+      args:
+        executable: /bin/bash
 
     - name: Start Lotus daemon on the first node
-      when: inventory_hostname == groups['filecoin_nodes'][0]
+      when: inventory_hostname == groups['filecoin_nodes'][0] and genesis_block_created is changed
       shell: |
         cd /root/lotus
         ./lotus daemon --lotus-make-genesis=devgen.car --genesis-template=/root/localnet.json --bootstrap=false
       async: 3600
       poll: 0
-      when: genesis_block_created is changed
+      args:
+        executable: /bin/bash
 
     - name: Initialize and start miner on the first node
       when: inventory_hostname == groups['filecoin_nodes'][0]
@@ -79,14 +108,18 @@
         ./lotus-miner run --nosync
       async: 3600
       poll: 0
+      args:
+        executable: /bin/bash
 
     - name: Get multiaddress from the first node
+      when: inventory_hostname == groups['filecoin_nodes'][0]
       shell: |
-        source /etc/profile
+        source /etc/profile.d/lotus.sh
         cd /root/lotus
         ./lotus net listen
       register: multiaddr_output
-      when: inventory_hostname == groups['filecoin_nodes'][0]
+      args:
+        executable: /bin/bash
 
     - name: Set fact for multiaddress
       set_fact:
@@ -111,6 +144,8 @@
     - name: Copy genesis block to the second node (on the first node)
       when: inventory_hostname == groups['filecoin_nodes'][0]
       shell: scp /root/localnet.json {{ hostvars[groups['filecoin_nodes'][1]].ansible_host }}:/root/localnet.json
+      args:
+        executable: /bin/bash
 
     - name: Start Lotus daemon on the second node
       when: inventory_hostname == groups['filecoin_nodes'][1]
@@ -119,9 +154,13 @@
         ./lotus daemon --genesis=/root/localnet.json --bootstrap=false
       async: 3600
       poll: 0
+      args:
+        executable: /bin/bash
 
     - name: Connect second node to the first node
       when: inventory_hostname == groups['filecoin_nodes'][1]
       shell: |
         cd /root/lotus
         ./lotus net connect /ip4/{{ hostvars[groups['filecoin_nodes'][0]].ansible_host }}/tcp/{{ hostvars[groups['filecoin_nodes'][0]].port }}/p2p/{{ hostvars[groups['filecoin_nodes'][0]].peer_id }}
+      args:
+        executable: /bin/bash
