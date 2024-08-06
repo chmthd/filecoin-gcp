@@ -13,31 +13,13 @@ IMAGE_FAMILY="ubuntu-2004-lts"          # Ubuntu 20.04 LTS image
 IMAGE_PROJECT="ubuntu-os-cloud"
 MINER_INSTANCE_NAME="filecoin-miner"
 CLIENT_INSTANCE_NAME="filecoin-client"
-MACHINE_TYPE_MINER="e2-standard-4"      # 4 vCPUs, 15 GiB memory
-MACHINE_TYPE_CLIENT="e2-standard-2"     # 2 vCPU, 8 GiB memory
+MACHINE_TYPE_MINER="e2-standard-32"      # 4 vCPUs, 15 GiB memory
+MACHINE_TYPE_CLIENT="e2-standard-32"     # 2 vCPU, 8 GiB memory
 DISK_SIZE_MINER="64"                    # 64 GiB for miner
 DISK_SIZE_CLIENT="32"                   # 32 GiB for client
 PREEMPTIBLE=false                       # Set to true if you want preemptible instances
 SSH_KEY_PATH="$HOME/.ssh/google_compute_engine.pub"  # Path to the SSH public key
-BUCKET_NAME="filecoin-proving-params-bucket"  # GCS bucket name
 PROVING_PARAMS_DIR="/var/tmp/filecoin-proof-parameters"
-
-# Function to check if a GCS bucket exists
-bucket_exists() {
-    gsutil ls -p $PROJECT_ID gs://$BUCKET_NAME/ &>/dev/null
-    return $?
-}
-
-# Function to create a GCS bucket if it doesn't exist
-create_bucket_if_not_exists() {
-    if bucket_exists; then
-        echo "GCS bucket '$BUCKET_NAME' already exists, skipping creation."
-    else
-        echo "Creating GCS bucket '$BUCKET_NAME'..."
-        gsutil mb -p $PROJECT_ID -l $REGION gs://$BUCKET_NAME
-        echo "Bucket '$BUCKET_NAME' created successfully."
-    fi
-}
 
 # Function to check if a resource exists
 resource_exists() {
@@ -175,11 +157,10 @@ IS_MINER=$1
 
 # Variables
 LOTUS_REPO="https://github.com/filecoin-project/lotus.git"
-LOTUS_DIR="$HOME/lotus-devnet"
+LOTUS_DIR="$HOME/lotus-local-net"
 GO_VERSION="1.21.7" # Updated Go version to meet Lotus requirements
-SECTOR_SIZE="20000"  # Sector size set to 20000 bytes for testing
-NUM_SECTORS=1
-BUCKET_NAME="filecoin-proving-params-bucket"  # GCS bucket name
+SECTOR_SIZE="2KiB"  # Sector size set to 2 KiB for testing
+NUM_SECTORS=2
 PROVING_PARAMS_DIR="/var/tmp/filecoin-proof-parameters"
 
 # Function to check if proving parameters are available locally
@@ -189,32 +170,6 @@ are_proving_params_available() {
         return 0 # True: params available
     else
         return 1 # False: params not available
-    fi
-}
-
-# Function to download proving parameters from GCS if not available locally
-download_proving_params() {
-    if are_proving_params_available; then
-        echo "Proving parameters already available locally, skipping download."
-    else
-        echo "Downloading proving parameters from GCS..."
-        mkdir -p $PROVING_PARAMS_DIR
-        if gsutil -m cp gs://$BUCKET_NAME/proving-parameters/*.params $PROVING_PARAMS_DIR/; then
-            echo "Proving parameters downloaded successfully from GCS."
-        else
-            echo "Failed to download proving parameters. Check GCS permissions and bucket availability."
-            exit 1
-        fi
-    fi
-}
-
-# Function to upload proving parameters to GCS if not already uploaded
-upload_proving_params_to_gcs() {
-    if gsutil -q stat gs://$BUCKET_NAME/proving-parameters/*.params; then
-        echo "Proving parameters already uploaded to GCS, skipping upload."
-    else
-        echo "Uploading proving parameters to GCS..."
-        gsutil -m cp $PROVING_PARAMS_DIR/*.params gs://$BUCKET_NAME/proving-parameters/
     fi
 }
 
@@ -258,18 +213,18 @@ rustc --version || { echo "Rust installation failed or PATH not set correctly. E
 echo "Cloning Lotus repository..."
 mkdir -p $LOTUS_DIR
 cd $LOTUS_DIR
-git clone $LOTUS_REPO
-cd lotus
+git clone $LOTUS_REPO .
 git checkout releases
-
-# Check for and download proving parameters
-download_proving_params
 
 # Build Lotus
 echo "Building Lotus binaries..."
-make lotus-seed lotus-miner lotus-worker
+make 2k
 
 # Verify that binaries are built
+if [[ ! -f ./lotus ]]; then
+    echo "Error: lotus binary not found after build. Exiting."
+    exit 1
+fi
 if [[ ! -f ./lotus-seed ]]; then
     echo "Error: lotus-seed binary not found after build. Exiting."
     exit 1
@@ -285,16 +240,15 @@ fi
 
 # Fetch proving parameters if not already available
 if ! are_proving_params_available; then
-    echo "Fetching proving parameters..."
+    echo "Fetching proving parameters directly..."
     ./lotus fetch-params $SECTOR_SIZE
-    # Upload to GCS after downloading
-    upload_proving_params_to_gcs
 fi
 
 if [ "$IS_MINER" = "true" ]; then
     # Pre-seal sectors for the genesis block
     echo "Pre-sealing sectors..."
-    ./lotus-seed pre-seal --sector-size $SECTOR_SIZE --num-sectors $NUM_SECTORS
+    rm -rf ~/.genesis-sectors
+    ./lotus-seed pre-seal --sector-size=$SECTOR_SIZE --num-sectors=$NUM_SECTORS
 
     # Create genesis block
     echo "Creating genesis block..."
@@ -319,14 +273,14 @@ EOL
 
     # Start the client node
     echo "Starting the client node..."
-    screen -dmS lotus_client bash -c "cd $LOTUS_DIR/lotus && ./lotus daemon --lotus-make-genesis=devgen.car --genesis-template=localnet.json --bootstrap=false"
+    screen -dmS lotus_client bash -c "cd $LOTUS_DIR && ./lotus daemon --lotus-make-genesis=devgen.car --genesis-template=localnet.json --bootstrap=false"
 
     # Wait for client node to start
     sleep 10
 
     # Import the genesis miner key
     echo "Importing the genesis miner key..."
-    cd $LOTUS_DIR/lotus
+    cd $LOTUS_DIR
     ./lotus wallet import --as-default ~/.genesis-sectors/pre-seal-t01000.key
 
     # Initialize the genesis miner
@@ -335,9 +289,9 @@ EOL
 
     # Start the storage provider node
     echo "Starting the storage provider node..."
-    screen -dmS lotus_miner bash -c "cd $LOTUS_DIR/lotus && ./lotus-miner run --nosync"
+    screen -dmS lotus_miner bash -c "cd $LOTUS_DIR && ./lotus-miner run --nosync"
 
-    echo "Miner node setup complete. The miner node is running with 32 GiB sector."
+    echo "Miner node setup complete. The miner node is running with 2 KiB sector."
 else
     # Export environment variables for client node
     echo "Exporting environment variables for client..."
@@ -348,14 +302,11 @@ else
 
     # Start the client node
     echo "Starting the client node..."
-    screen -dmS lotus_client bash -c "cd $LOTUS_DIR/lotus && ./lotus daemon --bootstrap=false"
+    screen -dmS lotus_client bash -c "cd $LOTUS_DIR && ./lotus daemon --bootstrap=false"
 
     echo "Client node setup complete. The client node is running."
 fi
 EOF
-
-# Create GCS bucket for proving parameters if not exists
-create_bucket_if_not_exists
 
 # Set up the miner node
 setup_filecoin_node $MINER_INSTANCE_NAME true
