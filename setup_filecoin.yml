@@ -1,0 +1,127 @@
+---
+- name: Configure and Connect Filecoin Nodes
+  hosts: filecoin_nodes
+  become: yes
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name:
+          - git
+          - build-essential
+          - jq
+          - pkg-config
+          - curl
+          - wget
+          - tmux
+        state: present
+
+    - name: Install Go
+      shell: |
+        wget https://go.dev/dl/go1.20.7.linux-amd64.tar.gz
+        tar -C /usr/local -xzf go1.20.7.linux-amd64.tar.gz
+        echo "export PATH=\$PATH:/usr/local/go/bin" >> /etc/profile
+        source /etc/profile
+
+    - name: Clone Lotus repository
+      git:
+        repo: 'https://github.com/filecoin-project/lotus.git'
+        dest: /root/lotus
+        version: releases
+
+    - name: Build Lotus
+      shell: |
+        cd /root/lotus
+        make 2k
+        ./lotus fetch-params 2048
+
+    - name: Set environment variables
+      lineinfile:
+        path: /etc/profile
+        line: "{{ item }}"
+      loop:
+        - 'export LOTUS_PATH=/root/.lotus-local-net'
+        - 'export LOTUS_MINER_PATH=/root/.lotus-miner-local-net'
+        - 'export LOTUS_SKIP_GENESIS_CHECK=_yes_'
+        - 'export CGO_CFLAGS_ALLOW="-D__BLST_PORTABLE__"'
+        - 'export CGO_CFLAGS="-D__BLST_PORTABLE__"'
+
+    - name: Source environment variables
+      shell: source /etc/profile
+
+    - name: Pre-seal sectors and create genesis block (only on the first node)
+      when: inventory_hostname == groups['filecoin_nodes'][0]
+      shell: |
+        cd /root/lotus
+        ./lotus-seed pre-seal --sector-size 2KiB --num-sectors 2
+        ./lotus-seed genesis new /root/localnet.json
+        ./lotus-seed genesis add-miner /root/localnet.json /root/.genesis-sectors/pre-seal-t01000.json
+      register: genesis_block_created
+
+    - name: Start Lotus daemon on the first node
+      when: inventory_hostname == groups['filecoin_nodes'][0]
+      shell: |
+        cd /root/lotus
+        ./lotus daemon --lotus-make-genesis=devgen.car --genesis-template=/root/localnet.json --bootstrap=false
+      async: 3600
+      poll: 0
+      when: genesis_block_created is changed
+
+    - name: Initialize and start miner on the first node
+      when: inventory_hostname == groups['filecoin_nodes'][0]
+      shell: |
+        cd /root/lotus
+        ./lotus wallet import --as-default /root/.genesis-sectors/pre-seal-t01000.key
+        ./lotus-miner init --genesis-miner --actor=t01000 --sector-size=2KiB --pre-sealed-sectors=/root/.genesis-sectors/pre-seal-t01000.json --pre-sealed-metadata=/root/.genesis-sectors/pre-seal-t01000.json --nosync
+        ./lotus-miner run --nosync
+      async: 3600
+      poll: 0
+
+    - name: Get multiaddress from the first node
+      shell: |
+        source /etc/profile
+        cd /root/lotus
+        ./lotus net listen
+      register: multiaddr_output
+      when: inventory_hostname == groups['filecoin_nodes'][0]
+
+    - name: Set fact for multiaddress
+      set_fact:
+        multiaddress: "{{ multiaddr_output.stdout }}"
+      when: inventory_hostname == groups['filecoin_nodes'][0]
+
+    - name: Parse multiaddress to get port and peer ID
+      set_fact:
+        port: "{{ multiaddress.split('/')[4] }}"
+        peer_id: "{{ multiaddress.split('/')[6] }}"
+      when: inventory_hostname == groups['filecoin_nodes'][0]
+
+    - name: Add port and peer ID to group vars
+      add_host:
+        name: "{{ item }}"
+        group: filecoin_nodes
+        port: "{{ port }}"
+        peer_id: "{{ peer_id }}"
+      with_items: "{{ groups['filecoin_nodes'] }}"
+      when: inventory_hostname == groups['filecoin_nodes'][0]
+
+    - name: Copy genesis block to the second node (on the first node)
+      when: inventory_hostname == groups['filecoin_nodes'][0]
+      shell: scp /root/localnet.json {{ hostvars[groups['filecoin_nodes'][1]].ansible_host }}:/root/localnet.json
+
+    - name: Start Lotus daemon on the second node
+      when: inventory_hostname == groups['filecoin_nodes'][1]
+      shell: |
+        cd /root/lotus
+        ./lotus daemon --genesis=/root/localnet.json --bootstrap=false
+      async: 3600
+      poll: 0
+
+    - name: Connect second node to the first node
+      when: inventory_hostname == groups['filecoin_nodes'][1]
+      shell: |
+        cd /root/lotus
+        ./lotus net connect /ip4/{{ hostvars[groups['filecoin_nodes'][0]].ansible_host }}/tcp/{{ hostvars[groups['filecoin_nodes'][0]].port }}/p2p/{{ hostvars[groups['filecoin_nodes'][0]].peer_id }}

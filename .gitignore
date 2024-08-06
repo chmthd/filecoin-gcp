@@ -31,3 +31,8 @@ known_hosts
 *.terraform.lock.info
 .terraform/
 
+*.ini
+*.json
+*.py
+*.sh
+

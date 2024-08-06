@@ -8,6 +8,9 @@ tar -C /usr/local -xzf go1.20.7.linux-amd64.tar.gz
 echo "export PATH=\$PATH:/usr/local/go/bin" >> /etc/profile
 source /etc/profile
 
+# Install Ansible
+sudo pip3 install ansible
+
 # Clone Lotus and build
 git clone https://github.com/filecoin-project/lotus.git /root/lotus
 cd /root/lotus

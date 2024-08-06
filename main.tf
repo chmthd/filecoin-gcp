@@ -3,14 +3,10 @@ provider "google" {
   region      = "us-central1"
 }
 
-resource "google_compute_network" "vpc_network" {
-  name = "filecoin-network"
-}
-
 resource "google_compute_instance" "filecoin_instance" {
   count        = 2
   name         = "filecoin-node-${count.index + 1}"
-  machine_type = "e2-standard-4"
+  machine_type = "e2-standard-16"
   zone         = "us-central1-a"
 
   boot_disk {
@@ -24,17 +20,45 @@ resource "google_compute_instance" "filecoin_instance" {
     network = google_compute_network.vpc_network.name
 
     access_config {
-      # Include this section to allocate a public IP address
+      # Allocates a public IP address
     }
   }
 
-  metadata_startup_script = file("setup.sh")
-
   tags = ["filecoin-node"]
+
+  metadata_startup_script = file("setup.sh")
 
   service_account {
     scopes = ["https://www.googleapis.com/auth/cloud-platform"]
   }
+}
+
+resource "google_compute_network" "vpc_network" {
+  name = "filecoin-network"
+}
+
+resource "google_compute_firewall" "allow_ssh" {
+  name    = "allow-ssh"
+  network = google_compute_network.vpc_network.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  source_ranges = ["0.0.0.0/0"] # Open to the world; consider restricting for security
+}
+
+resource "google_compute_firewall" "allow_filecoin" {
+  name    = "allow-filecoin"
+  network = google_compute_network.vpc_network.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["1234", "1347"] # Replace with actual ports used by Lotus
+  }
+
+  source_ranges = ["0.0.0.0/0"] # Adjust to specific IP ranges for better security
 }
 
 output "instance_ips" {
