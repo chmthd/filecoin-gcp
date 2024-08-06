@@ -10,7 +10,7 @@ IS_MINER=$1
 LOTUS_REPO="https://github.com/filecoin-project/lotus.git"
 LOTUS_DIR="$HOME/lotus-devnet"
 GO_VERSION="1.21.7" # Updated Go version to meet Lotus requirements
-SECTOR_SIZE="20000"  # 32 GiB in bytes
+SECTOR_SIZE="20000"  # Sector size set to 20000 bytes for testing
 NUM_SECTORS=1
 BUCKET_NAME="filecoin-proving-params-bucket"  # GCS bucket name
 PROVING_PARAMS_DIR="/var/tmp/filecoin-proof-parameters"
@@ -32,10 +32,12 @@ download_proving_params() {
     else
         echo "Downloading proving parameters from GCS..."
         mkdir -p $PROVING_PARAMS_DIR
-        gsutil -m cp gs://$BUCKET_NAME/proving-parameters/*.params $PROVING_PARAMS_DIR/ || {
+        if gsutil -m cp gs://$BUCKET_NAME/proving-parameters/*.params $PROVING_PARAMS_DIR/; then
+            echo "Proving parameters downloaded successfully from GCS."
+        else
             echo "Failed to download proving parameters. Check GCS permissions and bucket availability."
             exit 1
-        }
+        fi
     fi
 }
 
@@ -52,7 +54,7 @@ upload_proving_params_to_gcs() {
 # Update and install dependencies
 echo "Updating and installing dependencies..."
 sudo apt update
-sudo apt install -y build-essential jq pkg-config curl git bzr hwloc ocl-icd-opencl-dev
+sudo apt install -y build-essential jq pkg-config curl git bzr hwloc libhwloc-dev ocl-icd-opencl-dev
 
 # Install Go
 echo "Installing Go..."
@@ -98,7 +100,21 @@ download_proving_params
 
 # Build Lotus
 echo "Building Lotus binaries..."
-make clean all
+make lotus-seed lotus-miner lotus-worker
+
+# Verify that binaries are built
+if [[ ! -f ./lotus-seed ]]; then
+    echo "Error: lotus-seed binary not found after build. Exiting."
+    exit 1
+fi
+if [[ ! -f ./lotus-miner ]]; then
+    echo "Error: lotus-miner binary not found after build. Exiting."
+    exit 1
+fi
+if [[ ! -f ./lotus-worker ]]; then
+    echo "Error: lotus-worker binary not found after build. Exiting."
+    exit 1
+fi
 
 # Fetch proving parameters if not already available
 if ! are_proving_params_available; then

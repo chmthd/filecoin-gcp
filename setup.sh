@@ -221,7 +221,7 @@ upload_proving_params_to_gcs() {
 # Update and install dependencies
 echo "Updating and installing dependencies..."
 sudo apt update
-sudo apt install -y build-essential jq pkg-config curl git bzr hwloc ocl-icd-opencl-dev
+sudo apt install -y build-essential jq pkg-config curl git bzr hwloc libhwloc-dev ocl-icd-opencl-dev
 
 # Install Go
 echo "Installing Go..."
@@ -267,7 +267,21 @@ download_proving_params
 
 # Build Lotus
 echo "Building Lotus binaries..."
-make clean all
+make lotus-seed lotus-miner lotus-worker
+
+# Verify that binaries are built
+if [[ ! -f ./lotus-seed ]]; then
+    echo "Error: lotus-seed binary not found after build. Exiting."
+    exit 1
+fi
+if [[ ! -f ./lotus-miner ]]; then
+    echo "Error: lotus-miner binary not found after build. Exiting."
+    exit 1
+fi
+if [[ ! -f ./lotus-worker ]]; then
+    echo "Error: lotus-worker binary not found after build. Exiting."
+    exit 1
+fi
 
 # Fetch proving parameters if not already available
 if ! are_proving_params_available; then
